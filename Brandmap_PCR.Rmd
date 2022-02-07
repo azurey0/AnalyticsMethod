@@ -1,6 +1,5 @@
 ---
 title: "PCA, PCR for Brand Competition"
-author: "Anna Gaudette, Ayan Ghosh, Prathyusha Malapaka, Prithvi Bisht, Ran Zhang"
 date: "2/4/2022"
 output: 
   html_document: 
