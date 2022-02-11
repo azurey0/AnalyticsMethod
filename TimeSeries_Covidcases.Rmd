@@ -1,0 +1,168 @@
+---
+title: "Forecasting covid-19 cases by state using Time-Series"
+output:
+  html_document: 
+    theme: cerulean
+---
+## We use WV as a test state for tunning time series models.
+```{r setup, include=FALSE}
+
+library("forecast")
+library("tseries") 	
+library("prophet")
+
+```
+
+### Import data
+```{r }
+
+covid <- read.csv("United_States_COVID-19_Cases_and_Deaths_by_State_over_Time.csv")
+colnames(covid) <- c("date","KS", "WV")
+
+```
+
+plot and data cleansing
+```{r}
+wv = covid$WV
+wv <- na.omit(wv)
+n <- length(wv)
+ts.wv <- ts(wv, frequency = n, end = c(2022,2,9))
+plot.ts(ts.wv)
+```
+
+### Auto Arima -- Not giving good MAPE
+
+- The curve does not go smoothly, so we will try extract only the last 'smooth' part later
+```{r}
+auto <- auto.arima(ts.wv)		# fits ARIMA(p,d,q) x (P, D, Q) automatically
+summary(auto)
+auto.predict <- forecast:::forecast.Arima(auto, h = 8, level = c(68, 90))
+plot(auto.predict)
+```
+
+
+
+### ARIMA by hand
+adf.test for differences = 2 < 0.1, so it suggests differentiate twice
+```{r}
+adf.test(ts.wv)
+wv.d1 <- diff(ts.wv, diffrences = 1)
+adf.test(wv.d1)
+
+wv.d2 <- diff(ts.wv, differences = 2)
+adf.test(wv.d2)
+wv.d2 <- na.omit(wv.d2)
+```
+Determine p, q by looking at plots.  
+The values converges very slow.  
+```{r}
+# AR(p) => Pacf 
+Pacf(wv.d2, lag.max = 50)	
+# MA(q) => Acf
+Acf(wv.d2, lag.max = 30)	
+```
+
+Use different p,q and d = 2 to build ARIMA model, compare MAPE, the best one is ARIMA(6,2,3) with MAPE of 0.2537424  
+```{r}
+library(forecast)
+h = 7
+# far2 <- function(x, h){forecast(Arima(ts.wv, order = c(6,2,2), method="ML"), h=h)}
+# e <- tsCV(ts.wv, far2, h=7)
+#res.m1 <- summary(m1)
+m1 <- Arima(ts.wv, order = c(6,2,2), method="ML")
+res.m1 <- summary(m1)
+res.m1
+
+m2 <- Arima(ts.wv, order = c(6,2,3), method="ML")
+res.m2 <- summary(m2)
+res.m2
+
+m3 <- Arima(ts.wv, order = c(7,2,3), method="ML")
+res.m3 <- summary(m3)
+res.m3
+```
+### Prophet
+```{r}
+library(prophet)
+library(lubridate)
+
+## prepare data to meet prophet model standard
+wv.p <-  covid[,c("date", "WV")]
+wv.p <- na.omit(wv.p)
+colnames(wv.p) <- c("ds","y")
+# convert col to 'date' type
+wv.p$ds <- mdy(wv.p$ds)
+m6 <- prophet(wv.p)
+
+## make predictions
+m6.predict <- make_future_dataframe(m6, periods = 7)
+forecast <- predict(m6, m6.predict)
+tail(forecast[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')], n=7)
+df.cv <- cross_validation(m6, horizon = 7, units = 'days')
+df.p <- performance_metrics(df.cv)
+head(df.p)
+
+```
+
+
+As said at the beginning, we tried with data after the last disrupt change in slope, which is the early Jan of 2022, with the guess that omicron occurred.   
+
+## Build model with date > 1/3/2022  
+```{r}
+covid.2 <- tail(covid,n=38)
+```
+
+Running tests for ARIMA, and we can see the line is more smooth, compared to the one above:  
+```{r}
+wv.2 = covid.2$WV
+wv.2 <- na.omit(wv.2)
+n.2 <- length(wv.2)
+ts.wv.2 <- ts(wv.2, frequency = n.2, end = c(2022,2,9))
+plot.ts(ts.wv.2)
+adf.test(ts.wv.2)
+wv.2.d1 <- diff(ts.wv.2, diffrences = 1)
+adf.test(wv.2.d1)
+
+wv.2.d2 <- diff(ts.wv.2, differences = 2)
+adf.test(wv.2.d2)
+
+Pacf(wv.2.d2, lag.max = 10)	
+# MA(q) => Acf
+Acf(wv.2.d2, lag.max = 10)	
+```
+
+Using ARIMA, setting p,d,q by hand:
+```{r}
+h = 7
+# far2 <- function(x, h){forecast(Arima(ts.wv, order = c(6,2,2), method="ML"), h=h)}
+# e <- tsCV(ts.wv, far2, h=7)
+#res.m1 <- summary(m1)
+m4 <- Arima(ts.wv.2, order = c(4,2,4), method="ML")
+res.m4 <- summary(m4)
+res.m4
+
+######### best ARIMA model
+m5 <- Arima(ts.wv.2, order = c(4,2,7), method="ML")
+res.m5 <- summary(m5)
+res.m5
+
+```
+
+Using Prophet  
+**This model has the least MAPE of all models!** We finally adopted this.
+```{r}
+wv.p.2 <-  covid.2[,c("date", "WV")]
+wv.p.2 <- na.omit(wv.p.2)
+colnames(wv.p.2) <- c("ds","y")
+# convert col to 'date' type
+wv.p.2$ds <- mdy(wv.p.2$ds)
+m7 <- prophet(wv.p.2)
+
+## make predictions
+m7.predict <- make_future_dataframe(m7, periods = 10)
+forecast.m7 <- predict(m7, m7.predict)
+tail(forecast.m7[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')], n=7)
+df.cv.m7 <- cross_validation(m7, horizon = 7, units = 'days')
+df.p.m7 <- performance_metrics(df.cv.m7)
+head(df.p.m7)
+```
